@@ -91,6 +91,9 @@ pub struct SpendingLimitAccountParams {
     pub spending_limit: i128,
     /// The period in ledgers over which the spending limit applies.
     pub period_ledgers: u32,
+    /// The token contract whose transfers are metered by this policy. All
+    /// tracked transfers are denominated in this token.
+    pub token: Address,
 }
 
 /// Internal storage structure for spending limit tracking.
@@ -105,6 +108,8 @@ pub struct SpendingLimitData {
     pub spending_history: Vec<SpendingEntry>,
     /// Cached total of all amounts in spending_history.
     pub cached_total_spent: i128,
+    /// The token contract whose transfers are metered by this policy.
+    pub token: Address,
 }
 
 /// Individual spending entry for tracking purposes.
@@ -211,8 +216,29 @@ pub fn get_spending_limit_data(
 /// * [`SpendingLimitError::LessThanZero`] - When the transfer amount is
 ///   negative.
 /// * [`SpendingLimitError::NotAllowed`] - When there are no authenticated
-///   signers, the context is not a transfer with well-formatted amount.
+///   signers, or the context invokes the metered token with anything other
+///   than a well-formed `transfer` (directly or through the smart account's
+///   `execute` entry point).
 /// * refer to [`get_spending_limit_data`] errors.
+///
+/// # Metering model
+///
+/// The policy meters transfers of the configured token however they are
+/// authorized:
+///
+/// * **Direct invocation** — the context is a call to the token contract
+///   itself (`transfer(from, to, amount)`).
+/// * **Account-mediated invocation** — the context is a call to the smart
+///   account's `execute(target, target_fn, target_args)` entry point whose
+///   inner call is a `transfer` on the token. This is how smart-account
+///   clients (e.g. `smart-account-kit`) submit operations.
+///
+/// Contexts that do not touch the metered token (other contract calls,
+/// contract deployments, account management) pass through unmetered — the
+/// policy constrains token spending, not the rule's other authority. Calls
+/// that reach the metered token with any function other than `transfer` are
+/// rejected, so the limit cannot be sidestepped through the token's other
+/// entry points (e.g. `approve` + a later `transfer_from`).
 ///
 /// # Events
 ///
@@ -237,68 +263,101 @@ pub fn enforce(
     let mut data = get_spending_limit_data(e, context_rule.id, smart_account);
     let current_ledger = e.ledger().sequence();
 
-    match context {
-        Context::Contract(ContractContext { fn_name, args, .. }) => {
-            if fn_name == &symbol_short!("transfer") {
-                if let Some(amount_val) = args.get(2) {
-                    if let Ok(amount) = i128::try_from_val(e, &amount_val) {
-                        if amount < 0 {
-                            panic_with_error!(e, SpendingLimitError::LessThanZero)
+    // Resolve the (token_call_fn, token_call_args) pair if this context
+    // reaches the metered token, either directly or through `execute`.
+    let token_call: Option<(soroban_sdk::Symbol, Vec<soroban_sdk::Val>)> = match context {
+        Context::Contract(ContractContext { contract, fn_name, args }) => {
+            if contract == &data.token {
+                // Direct invocation of the metered token.
+                Some((fn_name.clone(), args.clone()))
+            } else if contract == smart_account && fn_name == &symbol_short!("execute") {
+                // Account-mediated invocation: unwrap
+                // `execute(target, target_fn, target_args)`.
+                let target = args.get(0).and_then(|v| Address::try_from_val(e, &v).ok());
+                match target {
+                    Some(target) if target == data.token => {
+                        let target_fn = args
+                            .get(1)
+                            .and_then(|v| soroban_sdk::Symbol::try_from_val(e, &v).ok());
+                        let target_args = args
+                            .get(2)
+                            .and_then(|v| Vec::<soroban_sdk::Val>::try_from_val(e, &v).ok());
+                        match (target_fn, target_args) {
+                            (Some(f), Some(a)) => Some((f, a)),
+                            // `execute` reaches the token but is malformed —
+                            // reject rather than let it through unmetered.
+                            _ => panic_with_error!(e, SpendingLimitError::NotAllowed),
                         }
-
-                        // A zero-amount transfer moves no funds and has no effect on the
-                        // spending budget, so it is always permitted. Without this guard a
-                        // zero transfer would be rejected whenever `cached_total_spent`
-                        // exceeds `spending_limit` (reachable after `set_spending_limit`
-                        // lowers the limit below the amount already spent in the window).
-                        if amount == 0 {
-                            return;
-                        }
-
-                        // Clean up old entries outside the rolling window BEFORE checking limit
-                        let removed_amount = cleanup_old_entries(
-                            &mut data.spending_history,
-                            current_ledger,
-                            data.period_ledgers,
-                        );
-                        data.cached_total_spent -= removed_amount;
-
-                        // Now check if the transaction exceeds the spending limit using updated
-                        // cached total
-                        if data.cached_total_spent + amount > data.spending_limit {
-                            panic_with_error!(e, SpendingLimitError::SpendingLimitExceeded)
-                        }
-
-                        if data.spending_history.len() >= MAX_HISTORY_ENTRIES {
-                            panic_with_error!(e, SpendingLimitError::HistoryCapacityExceeded)
-                        }
-
-                        // Add the new spending entry
-                        let new_entry = SpendingEntry { amount, ledger_sequence: current_ledger };
-                        data.spending_history.push_back(new_entry);
-                        data.cached_total_spent += amount;
-
-                        e.storage().persistent().set(&key, &data);
-
-                        SpendingLimitEnforced {
-                            smart_account: smart_account.clone(),
-                            context: context.clone(),
-                            context_rule_id: context_rule.id,
-                            amount,
-                            total_spent_in_period: data.cached_total_spent,
-                        }
-                        .publish(e);
-
-                        return;
                     }
+                    // `execute` targeting some other contract: unmetered.
+                    _ => None,
                 }
+            } else {
+                // A call that does not touch the metered token: unmetered.
+                None
             }
         }
-        _ => {
-            panic_with_error!(e, SpendingLimitError::NotAllowed)
-        }
+        // Contract deployments and other context kinds: unmetered.
+        _ => None,
+    };
+
+    let Some((token_fn, token_args)) = token_call else {
+        return;
+    };
+
+    // From here on the context reaches the metered token: only a well-formed
+    // `transfer` is acceptable.
+    if token_fn != symbol_short!("transfer") {
+        panic_with_error!(e, SpendingLimitError::NotAllowed)
     }
-    panic_with_error!(e, SpendingLimitError::NotAllowed)
+    let amount = token_args
+        .get(2)
+        .and_then(|v| i128::try_from_val(e, &v).ok())
+        .unwrap_or_else(|| panic_with_error!(e, SpendingLimitError::NotAllowed));
+
+    if amount < 0 {
+        panic_with_error!(e, SpendingLimitError::LessThanZero)
+    }
+
+    // A zero-amount transfer moves no funds and has no effect on the
+    // spending budget, so it is always permitted. Without this guard a
+    // zero transfer would be rejected whenever `cached_total_spent`
+    // exceeds `spending_limit` (reachable after `set_spending_limit`
+    // lowers the limit below the amount already spent in the window).
+    if amount == 0 {
+        return;
+    }
+
+    // Clean up old entries outside the rolling window BEFORE checking limit
+    let removed_amount =
+        cleanup_old_entries(&mut data.spending_history, current_ledger, data.period_ledgers);
+    data.cached_total_spent -= removed_amount;
+
+    // Now check if the transaction exceeds the spending limit using updated
+    // cached total
+    if data.cached_total_spent + amount > data.spending_limit {
+        panic_with_error!(e, SpendingLimitError::SpendingLimitExceeded)
+    }
+
+    if data.spending_history.len() >= MAX_HISTORY_ENTRIES {
+        panic_with_error!(e, SpendingLimitError::HistoryCapacityExceeded)
+    }
+
+    // Add the new spending entry
+    let new_entry = SpendingEntry { amount, ledger_sequence: current_ledger };
+    data.spending_history.push_back(new_entry);
+    data.cached_total_spent += amount;
+
+    e.storage().persistent().set(&key, &data);
+
+    SpendingLimitEnforced {
+        smart_account: smart_account.clone(),
+        context: context.clone(),
+        context_rule_id: context_rule.id,
+        amount,
+        total_spent_in_period: data.cached_total_spent,
+    }
+    .publish(e);
 }
 
 /// Sets the spending limit for a smart account's spending limit policy.
@@ -347,9 +406,12 @@ pub fn set_spending_limit(
     .publish(e);
 }
 
-/// Installs the spending limit policy on a smart account. Only `CallContract`
-/// context type is allowed as it pins the policy to a specific token contract,
-/// ensuring all tracked transfers are denominated in the same token.
+/// Installs the spending limit policy on a smart account. The metered token
+/// is pinned by `params.token`, ensuring all tracked transfers are
+/// denominated in the same token, so the policy can be attached to a
+/// `Default` rule or a `CallContract` rule (typically scoped to the token or
+/// to the smart account itself for account-mediated `execute` calls).
+/// `CreateContract` rules are not allowed — no transfer can ever match them.
 /// Requires authorization from the smart account.
 ///
 /// # Arguments
@@ -363,7 +425,7 @@ pub fn set_spending_limit(
 /// # Errors
 ///
 /// * [`SpendingLimitError::OnlyCallContractAllowed`] - When the context rule
-///   type is not `CallContract`.
+///   type is `CreateContract`.
 /// * [`SpendingLimitError::InvalidLimitOrPeriod`] - When spending_limit is not
 ///   positive or period_ledgers is zero.
 /// * [`SpendingLimitError::AlreadyInstalled`] - When policy was already
@@ -382,7 +444,7 @@ pub fn install(
     // Require authorization from the smart_account
     smart_account.require_auth();
 
-    if !matches!(context_rule.context_type, ContextRuleType::CallContract(_)) {
+    if matches!(context_rule.context_type, ContextRuleType::CreateContract(_)) {
         panic_with_error!(e, SpendingLimitError::OnlyCallContractAllowed)
     }
 
@@ -400,6 +462,7 @@ pub fn install(
         period_ledgers: params.period_ledgers,
         spending_history: Vec::new(e),
         cached_total_spent: 0,
+        token: params.token.clone(),
     };
 
     e.storage().persistent().set(&key, &data);

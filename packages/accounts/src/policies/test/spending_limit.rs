@@ -23,6 +23,11 @@ fn create_signers(e: &Env) -> (Address, Address, Address) {
     (addr1, addr2, addr3)
 }
 
+
+fn test_token(e: &Env) -> Address {
+    Address::from_str(e, "CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526")
+}
+
 fn create_context_rule(e: &Env) -> ContextRule {
     let (addr1, addr2, addr3) = create_signers(e);
     let mut signers = Vec::new(e);
@@ -43,7 +48,7 @@ fn create_context_rule(e: &Env) -> ContextRule {
 }
 
 fn create_transfer_context(e: &Env, amount: i128) -> Context {
-    let contract_address = Address::generate(e);
+    let contract_address = test_token(e);
     let from = Address::generate(e);
     let to = Address::generate(e);
 
@@ -69,7 +74,7 @@ fn install_success() {
 
     e.as_contract(&address, || {
         let context_rule = create_context_rule(&e);
-        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100 };
+        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
 
         install(&e, &params, &context_rule, &smart_account);
 
@@ -94,7 +99,7 @@ fn install_already_installed_fails() {
     e.mock_all_auths();
 
     let context_rule = create_context_rule(&e);
-    let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100 };
+    let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
 
     e.as_contract(&address, || {
         install(&e, &params, &context_rule, &smart_account);
@@ -106,8 +111,7 @@ fn install_already_installed_fails() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #3227)")]
-fn install_default_rule_not_allowed() {
+fn install_default_rule_allowed() {
     let e = Env::default();
     let address = e.register(MockContract, ());
     let smart_account = Address::generate(&e);
@@ -117,7 +121,7 @@ fn install_default_rule_not_allowed() {
     e.as_contract(&address, || {
         let mut context_rule = create_context_rule(&e);
         context_rule.context_type = ContextRuleType::Default;
-        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100 };
+        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
 
         install(&e, &params, &context_rule, &smart_account);
     });
@@ -136,7 +140,7 @@ fn install_create_contract_rule_not_allowed() {
         let mut context_rule = create_context_rule(&e);
         context_rule.context_type =
             ContextRuleType::CreateContract(BytesN::from_array(&e, &[0u8; 32]));
-        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100 };
+        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
 
         install(&e, &params, &context_rule, &smart_account);
     });
@@ -156,6 +160,7 @@ fn install_invalid_spending_limit() {
         let params = SpendingLimitAccountParams {
             spending_limit: 0, // Invalid: must be positive
             period_ledgers: 100,
+            token: test_token(&e),
         };
 
         install(&e, &params, &context_rule, &smart_account);
@@ -176,6 +181,7 @@ fn install_invalid_period() {
         let params = SpendingLimitAccountParams {
             spending_limit: 1_000_000,
             period_ledgers: 0, // Invalid: must be positive
+            token: test_token(&e),
         };
 
         install(&e, &params, &context_rule, &smart_account);
@@ -192,7 +198,7 @@ fn enforce_within_limit() {
     e.mock_all_auths();
 
     e.as_contract(&address, || {
-        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100 };
+        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
 
         install(&e, &params, &context_rule, &smart_account);
     });
@@ -231,7 +237,7 @@ fn enforce_exceeds_limit() {
     e.mock_all_auths();
 
     e.as_contract(&address, || {
-        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100 };
+        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
 
         install(&e, &params, &context_rule, &smart_account);
     });
@@ -253,7 +259,7 @@ fn enforce_no_singers() {
     e.mock_all_auths();
 
     e.as_contract(&address, || {
-        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100 };
+        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
 
         install(&e, &params, &context_rule, &smart_account);
     });
@@ -273,7 +279,7 @@ fn rolling_window_functionality() {
     // Install policy
     e.mock_all_auths();
     e.as_contract(&address, || {
-        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100 };
+        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
         install(&e, &params, &context_rule, &smart_account);
     });
     e.ledger().with_mut(|li| {
@@ -347,7 +353,7 @@ fn rolling_window_cutoff() {
     });
 
     e.as_contract(&address, || {
-        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers };
+        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers, token: test_token(&e) };
         install(&e, &params, &context_rule, &smart_account);
     });
 
@@ -382,7 +388,7 @@ fn multiple_transactions_within_period() {
     // Install policy
     e.mock_all_auths();
     e.as_contract(&address, || {
-        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100 };
+        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
         install(&e, &params, &context_rule, &smart_account);
     });
 
@@ -421,7 +427,7 @@ fn set_spending_limit_success() {
     e.mock_all_auths();
 
     e.as_contract(&address, || {
-        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100 };
+        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
 
         install(&e, &params, &context_rule, &smart_account);
     });
@@ -448,7 +454,7 @@ fn enforce_zero_amount_allowed_after_limit_reduction() {
     e.mock_all_auths();
 
     e.as_contract(&address, || {
-        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100 };
+        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
         install(&e, &params, &context_rule, &smart_account);
     });
 
@@ -489,7 +495,7 @@ fn set_invalid_spending_limit() {
     e.mock_all_auths();
 
     e.as_contract(&address, || {
-        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100 };
+        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
 
         install(&e, &params, &context_rule, &smart_account);
     });
@@ -510,7 +516,7 @@ fn uninstall_success() {
     e.mock_all_auths();
 
     e.as_contract(&address, || {
-        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100 };
+        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
 
         install(&e, &params, &context_rule, &smart_account);
 
@@ -568,7 +574,7 @@ fn enforce_non_transfer_context_errors() {
     e.mock_all_auths();
 
     e.as_contract(&address, || {
-        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100 };
+        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
 
         install(&e, &params, &context_rule, &smart_account);
     });
@@ -598,7 +604,7 @@ fn enforce_on_non_contract_context_errors() {
     e.mock_all_auths();
 
     e.as_contract(&address, || {
-        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100 };
+        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
         install(&e, &params, &context_rule, &smart_account);
     });
 
@@ -619,7 +625,7 @@ fn enforce_invalid_amount_arg_errors() {
     let address = e.register(MockContract, ());
     let smart_account = Address::generate(&e);
     let context_rule = create_context_rule(&e);
-    let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100 };
+    let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
 
     e.mock_all_auths();
 
@@ -655,7 +661,7 @@ fn enforce_missing_amount_arg_errors() {
     let address = e.register(MockContract, ());
     let smart_account = Address::generate(&e);
     let context_rule = create_context_rule(&e);
-    let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100 };
+    let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
 
     e.mock_all_auths();
 
@@ -694,7 +700,7 @@ fn enforce_negative_amount_errors() {
     e.mock_all_auths();
 
     e.as_contract(&address, || {
-        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100 };
+        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
         install(&e, &params, &context_rule, &smart_account);
     });
 
@@ -720,7 +726,7 @@ fn enforce_history_capacity_exceeded() {
     e.as_contract(&address, || {
         // Install with a very long period so entries don't expire
         let params =
-            SpendingLimitAccountParams { spending_limit: i128::MAX, period_ledgers: 1_000_000 };
+            SpendingLimitAccountParams { spending_limit: i128::MAX, period_ledgers: 1_000_000, token: test_token(&e) };
         install(&e, &params, &context_rule, &smart_account);
     });
 
@@ -755,7 +761,7 @@ fn history_capacity_allows_new_transaction_after_cleanup() {
 
     e.as_contract(&address, || {
         // Install with a short period so entries expire
-        let params = SpendingLimitAccountParams { spending_limit: i128::MAX, period_ledgers: 100 };
+        let params = SpendingLimitAccountParams { spending_limit: i128::MAX, period_ledgers: 100, token: test_token(&e) };
         install(&e, &params, &context_rule, &smart_account);
     });
 
@@ -795,14 +801,13 @@ fn enforce_non_transfer_fn_name_with_signers_errors() {
     e.mock_all_auths();
 
     e.as_contract(&address, || {
-        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100 };
+        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
         install(&e, &params, &context_rule, &smart_account);
     });
 
     e.as_contract(&address, || {
-        let contract_address = Address::generate(&e);
         let context = Context::Contract(ContractContext {
-            contract: contract_address,
+            contract: test_token(&e),
             fn_name: symbol_short!("deploy"),
             args: Vec::new(&e),
         });
@@ -822,12 +827,11 @@ fn enforce_missing_amount_arg_with_signers_errors() {
     e.mock_all_auths();
 
     e.as_contract(&address, || {
-        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100 };
+        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
         install(&e, &params, &context_rule, &smart_account);
     });
 
     e.as_contract(&address, || {
-        let contract_address = Address::generate(&e);
         let from = Address::generate(&e);
         let to = Address::generate(&e);
 
@@ -837,7 +841,7 @@ fn enforce_missing_amount_arg_with_signers_errors() {
         // No amount argument
 
         let context = Context::Contract(ContractContext {
-            contract: contract_address,
+            contract: test_token(&e),
             fn_name: symbol_short!("transfer"),
             args,
         });
@@ -857,12 +861,11 @@ fn enforce_invalid_amount_arg_with_signers_errors() {
     e.mock_all_auths();
 
     e.as_contract(&address, || {
-        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100 };
+        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
         install(&e, &params, &context_rule, &smart_account);
     });
 
     e.as_contract(&address, || {
-        let contract_address = Address::generate(&e);
         let from = Address::generate(&e);
         let to = Address::generate(&e);
 
@@ -872,7 +875,7 @@ fn enforce_invalid_amount_arg_with_signers_errors() {
         args.push_back(symbol_short!("invalid").into_val(&e));
 
         let context = Context::Contract(ContractContext {
-            contract: contract_address,
+            contract: test_token(&e),
             fn_name: symbol_short!("transfer"),
             args,
         });
@@ -882,8 +885,7 @@ fn enforce_invalid_amount_arg_with_signers_errors() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #3223)")]
-fn enforce_create_contract_context_with_signers_errors() {
+fn enforce_create_contract_context_with_signers_unmetered() {
     let e = Env::default();
     let address = e.register(MockContract, ());
     let smart_account = Address::generate(&e);
@@ -892,7 +894,7 @@ fn enforce_create_contract_context_with_signers_errors() {
     e.mock_all_auths();
 
     e.as_contract(&address, || {
-        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100 };
+        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
         install(&e, &params, &context_rule, &smart_account);
     });
 
@@ -903,5 +905,254 @@ fn enforce_create_contract_context_with_signers_errors() {
         });
 
         enforce(&e, &context, &context_rule.signers, &context_rule, &smart_account);
+    });
+}
+
+// ################## EXECUTE-CONTEXT (ACCOUNT-MEDIATED) TESTS ##################
+
+fn create_execute_context(
+    e: &Env,
+    smart_account: &Address,
+    target: &Address,
+    target_fn: soroban_sdk::Symbol,
+    amount: i128,
+) -> Context {
+    let from = Address::generate(e);
+    let to = Address::generate(e);
+
+    let mut inner_args: Vec<soroban_sdk::Val> = Vec::new(e);
+    inner_args.push_back(from.into_val(e));
+    inner_args.push_back(to.into_val(e));
+    inner_args.push_back(amount.into_val(e));
+
+    let mut args: Vec<soroban_sdk::Val> = Vec::new(e);
+    args.push_back(target.into_val(e));
+    args.push_back(target_fn.into_val(e));
+    args.push_back(inner_args.into_val(e));
+
+    Context::Contract(ContractContext {
+        contract: smart_account.clone(),
+        fn_name: symbol_short!("execute"),
+        args,
+    })
+}
+
+#[test]
+fn enforce_execute_wrapped_transfer_within_limit() {
+    let e = Env::default();
+    let address = e.register(MockContract, ());
+    let smart_account = Address::generate(&e);
+    let context_rule = create_context_rule(&e);
+
+    e.mock_all_auths();
+
+    e.as_contract(&address, || {
+        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
+        install(&e, &params, &context_rule, &smart_account);
+    });
+
+    e.as_contract(&address, || {
+        let context = create_execute_context(
+            &e,
+            &smart_account,
+            &test_token(&e),
+            symbol_short!("transfer"),
+            500_000,
+        );
+
+        enforce(&e, &context, &context_rule.signers, &context_rule, &smart_account);
+
+        let data = get_spending_limit_data(&e, context_rule.id, &smart_account);
+        assert_eq!(data.spending_history.get(0).unwrap().amount, 500_000);
+        assert_eq!(data.cached_total_spent, 500_000);
+    });
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3221)")]
+fn enforce_execute_wrapped_transfer_exceeds_limit() {
+    let e = Env::default();
+    let address = e.register(MockContract, ());
+    let smart_account = Address::generate(&e);
+    let context_rule = create_context_rule(&e);
+
+    e.mock_all_auths();
+
+    e.as_contract(&address, || {
+        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
+        install(&e, &params, &context_rule, &smart_account);
+    });
+
+    e.as_contract(&address, || {
+        let context = create_execute_context(
+            &e,
+            &smart_account,
+            &test_token(&e),
+            symbol_short!("transfer"),
+            1_500_000,
+        );
+
+        enforce(&e, &context, &context_rule.signers, &context_rule, &smart_account);
+    });
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3221)")]
+fn enforce_mixed_direct_and_execute_share_budget() {
+    let e = Env::default();
+    let address = e.register(MockContract, ());
+    let smart_account = Address::generate(&e);
+    let context_rule = create_context_rule(&e);
+
+    e.mock_all_auths();
+    // Start at a realistic ledger so the rolling-window cutoff (`<= C - P`)
+    // does not evict same-ledger entries recorded at sequence 0.
+    e.ledger().with_mut(|li| li.sequence_number = 1_000);
+
+    e.as_contract(&address, || {
+        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
+        install(&e, &params, &context_rule, &smart_account);
+    });
+
+    // Direct transfer consumes most of the budget…
+    e.as_contract(&address, || {
+        let context = create_transfer_context(&e, 800_000);
+        enforce(&e, &context, &context_rule.signers, &context_rule, &smart_account);
+    });
+
+    // …so an execute-wrapped transfer over the remainder is rejected.
+    e.as_contract(&address, || {
+        let context = create_execute_context(
+            &e,
+            &smart_account,
+            &test_token(&e),
+            symbol_short!("transfer"),
+            300_000,
+        );
+        enforce(&e, &context, &context_rule.signers, &context_rule, &smart_account);
+    });
+}
+
+#[test]
+fn enforce_execute_to_other_contract_unmetered() {
+    let e = Env::default();
+    let address = e.register(MockContract, ());
+    let smart_account = Address::generate(&e);
+    let context_rule = create_context_rule(&e);
+
+    e.mock_all_auths();
+
+    e.as_contract(&address, || {
+        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
+        install(&e, &params, &context_rule, &smart_account);
+    });
+
+    e.as_contract(&address, || {
+        // `execute` targeting a contract other than the metered token passes
+        // through without consuming budget, even over the limit.
+        let other = Address::generate(&e);
+        let context = create_execute_context(
+            &e,
+            &smart_account,
+            &other,
+            symbol_short!("transfer"),
+            5_000_000,
+        );
+        enforce(&e, &context, &context_rule.signers, &context_rule, &smart_account);
+
+        let data = get_spending_limit_data(&e, context_rule.id, &smart_account);
+        assert!(data.spending_history.is_empty());
+        assert_eq!(data.cached_total_spent, 0);
+    });
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3223)")]
+fn enforce_execute_non_transfer_on_token_errors() {
+    let e = Env::default();
+    let address = e.register(MockContract, ());
+    let smart_account = Address::generate(&e);
+    let context_rule = create_context_rule(&e);
+
+    e.mock_all_auths();
+
+    e.as_contract(&address, || {
+        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
+        install(&e, &params, &context_rule, &smart_account);
+    });
+
+    e.as_contract(&address, || {
+        // Reaching the metered token through `execute` with anything other
+        // than `transfer` (e.g. `approve`) must be rejected, not bypassed.
+        let context = create_execute_context(
+            &e,
+            &smart_account,
+            &test_token(&e),
+            symbol_short!("approve"),
+            500_000,
+        );
+        enforce(&e, &context, &context_rule.signers, &context_rule, &smart_account);
+    });
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3226)")]
+fn enforce_execute_wrapped_negative_amount_errors() {
+    let e = Env::default();
+    let address = e.register(MockContract, ());
+    let smart_account = Address::generate(&e);
+    let context_rule = create_context_rule(&e);
+
+    e.mock_all_auths();
+
+    e.as_contract(&address, || {
+        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
+        install(&e, &params, &context_rule, &smart_account);
+    });
+
+    e.as_contract(&address, || {
+        let context = create_execute_context(
+            &e,
+            &smart_account,
+            &test_token(&e),
+            symbol_short!("transfer"),
+            -1,
+        );
+        enforce(&e, &context, &context_rule.signers, &context_rule, &smart_account);
+    });
+}
+
+#[test]
+fn enforce_direct_call_to_other_contract_unmetered() {
+    let e = Env::default();
+    let address = e.register(MockContract, ());
+    let smart_account = Address::generate(&e);
+    let context_rule = create_context_rule(&e);
+
+    e.mock_all_auths();
+
+    e.as_contract(&address, || {
+        let params = SpendingLimitAccountParams { spending_limit: 1_000_000, period_ledgers: 100, token: test_token(&e) };
+        install(&e, &params, &context_rule, &smart_account);
+    });
+
+    e.as_contract(&address, || {
+        // A direct `transfer` on some other contract is not this policy's
+        // token and passes through without consuming budget.
+        let from = Address::generate(&e);
+        let to = Address::generate(&e);
+        let mut args: Vec<soroban_sdk::Val> = Vec::new(&e);
+        args.push_back(from.into_val(&e));
+        args.push_back(to.into_val(&e));
+        args.push_back(5_000_000i128.into_val(&e));
+        let context = Context::Contract(ContractContext {
+            contract: Address::generate(&e),
+            fn_name: symbol_short!("transfer"),
+            args,
+        });
+        enforce(&e, &context, &context_rule.signers, &context_rule, &smart_account);
+
+        let data = get_spending_limit_data(&e, context_rule.id, &smart_account);
+        assert!(data.spending_history.is_empty());
     });
 }
